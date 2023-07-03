@@ -1,6 +1,9 @@
 #include "common.h"
 #include "files.h"
 #include <asm/ldt.h>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <errno.h>
 #include <memory>
@@ -8,12 +11,21 @@
 #include <sys/syscall.h>
 #include <stdarg.h>
 #include <iostream>
-#include <fstream> 
+#include <fstream>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 uint32_t wibo::lastError = 0;
 char *wibo::commandLine;
 wibo::Executable *wibo::mainModule = 0;
 bool wibo::debugEnabled = false;
+
+#ifdef POITIN
+int wibo::sockFd;
+#endif
 
 void wibo::debug_log(const char *fmt, ...) {
 	va_list args;
@@ -160,6 +172,8 @@ int main(int argc, char **argv) {
 	// Create TIB
 	memset(&tib, 0, sizeof(tib));
 	tib.tib = &tib;
+	tib.sehFrame = (void*) 0x000dffcc;
+	tib.stackLimit = (void*) 0x000d0000;
 	tib.peb = (PEB*)calloc(sizeof(PEB), 1);
 	tib.peb->ProcessParameters = (RTL_USER_PROCESS_PARAMETERS*)calloc(sizeof(RTL_USER_PROCESS_PARAMETERS), 1);
 
@@ -221,8 +235,7 @@ int main(int argc, char **argv) {
 	wibo::commandLine = cmdLine.data();
 	DEBUG_LOG("Command line: %s\n", wibo::commandLine);
 
-	wibo::Executable exec;
-	wibo::mainModule = &exec;
+	wibo::mainModule = new wibo::Executable();
 
 	char* pe_path = argv[1];
 	FILE *f = fopen(pe_path, "rb");
@@ -232,7 +245,7 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	exec.loadPE(f);
+	wibo::mainModule->loadPE(f);
 	fclose(f);
 
 	// 32-bit windows only reserves the lowest 2GB of memory for use by a process (https://www.tenouk.com/WinVirtualAddressSpace.html)
@@ -271,12 +284,77 @@ int main(int argc, char **argv) {
 
 	procMap.close();
 
+#ifdef POITIN
+	wibo::sockFd = socket(AF_INET, SOCK_DGRAM, 0);
+
+	if (wibo::sockFd < 0) {
+		perror("Error creating socket");
+		return 1;
+	}
+
+	sockaddr_in server_addr;
+	memset(&server_addr, 0, sizeof(server_addr));
+
+	server_addr.sin_family    = AF_INET; // IPv4
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(8088);
+
+	if (bind(wibo::sockFd, (const struct sockaddr*) &server_addr, sizeof(server_addr)) < 0) {
+		perror("Error binding socket");
+		return 1;
+	}
+
+	fprintf(stderr, "sockFd = %d\n", wibo::sockFd);
+
+	// TODO: load the address from server / command line / env. / anything else?
+	// Also: stop hardcoding these.
+	// Also: doing anything less hackily.
+	void* stackBase = (void*) 0x0226ff84;
+	void* stackBasePageAligned = (void*) 0x2270000;
+
+	void* stackTop = (void*) 0x0226ff74;
+
+	// Make sure to map our stack with the correct permissions
+	// before we attempt to use it
+	int stackSize = 0x1000;
+	
+	void* stack = mmap(stackBasePageAligned - stackSize, stackSize, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_ANONYMOUS|MAP_FIXED|MAP_PRIVATE, -1, 0);
+	if (stack == MAP_FAILED) {
+		printf("Image mapping failed: %d!\n",  errno);
+	}
+	
+	memset(stackBasePageAligned - stackSize, 0, stackSize);
+#endif
+
+	int ebxVal = 0x41414141;
+	if (getenv("WIBO_EBX_OVERRIDE")) {
+		fprintf(stderr, "ebx override!\n");
+		char* ebxValString = getenv("WIBO_EBX_OVERRIDE");
+		ebxVal = atoi(ebxValString);
+	}	
+
 	uint16_t tibSegment = (tibDesc.entry_number << 3) | 7;
 	// Invoke the damn thing
 	asm(
-		"movw %0, %%fs; call *%1"
+		// Windows, for whatever reason, copies the start address to a bunch
+		// of registers
+		"movw %0, %%fs \n"
+		"mov %1, %%ecx \n"
+		"mov %1, %%esi \n"
+		"mov %1, %%edi \n"
+
+		// This is overwritten immediately, at least in aspsx
+		// We include it here for the sake of generating a matching trace
+		"mov $0x0226ffcc, %%eax \n"
+
+		// TODO: actually load these in from C
+		"mov $0x0226ff78, %%esp \n"
+		"mov $0x0226ff84, %%ebp \n"
+
+		"int3 \n"
+		"jmp *%1"
 		:
-		: "r"(tibSegment), "r"(exec.entryPoint)
+		: "r"(tibSegment), "r"(wibo::mainModule->entryPoint), "b"(ebxVal)
 	);
 	DEBUG_LOG("We came back\n");
 

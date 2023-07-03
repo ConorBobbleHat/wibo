@@ -153,6 +153,10 @@ bool wibo::Executable::loadPE(FILE *file) {
 		return false;
 	}
 
+	// Copy in the header section
+	fseek(file, 0, SEEK_SET);
+	fread((void*) header32.imageBase, header32.sizeOfHeaders, 1, file);
+
 	// Read the sections
 	fseek(file, offsetToPE + sizeof header + header.sizeOfOptionalHeader, SEEK_SET);
 

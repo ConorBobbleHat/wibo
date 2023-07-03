@@ -116,6 +116,12 @@ namespace kernel32 {
 
 	// @brief DWORD (unsigned int) returns a process identifier of the calling process.
 	unsigned int WIN_FUNC GetCurrentProcessId() {
+#ifdef POITIN
+		unsigned int id = 0;
+		recvfrom(wibo::sockFd, (char *) &id, 4, MSG_WAITALL, NULL, NULL);
+		return id;
+#endif
+		
 		uint32_t pid = getpid();
 		DEBUG_LOG("Current processID is: %d\n", pid);
 
@@ -130,6 +136,12 @@ namespace kernel32 {
 		// Cast thread_id to unsigned int to fit a DWORD
 		unsigned int u_thread_id = (unsigned int) thread_id;
 		
+#ifdef POITIN
+		unsigned int received_thread_id = 0;
+		recvfrom(wibo::sockFd, (char *) &received_thread_id, 4, MSG_WAITALL, NULL, NULL);
+		return received_thread_id;
+#endif
+
 		return u_thread_id;
 	}
 
@@ -307,6 +319,28 @@ namespace kernel32 {
 	 */
 	char *WIN_FUNC GetCommandLineA() {
 		DEBUG_LOG("GetCommandLineA\n");
+
+#ifdef POITIN
+		unsigned int winBuffer;
+		recvfrom(wibo::sockFd, (char*) &winBuffer, 4, MSG_WAITALL, NULL, NULL);	
+
+		unsigned int bufferLen;
+		recvfrom(wibo::sockFd, (char*) &bufferLen, 4, MSG_WAITALL, NULL, NULL);	
+
+		unsigned int bufferAddrPage = winBuffer & ~(4096 - 1);
+		void* m = mmap((void*) bufferAddrPage, bufferLen + (winBuffer - bufferAddrPage), PROT_READ|PROT_WRITE|PROT_EXEC, MAP_ANONYMOUS|MAP_FIXED|MAP_PRIVATE, -1, 0);
+		
+		
+		if (m == MAP_FAILED) {
+			return (char*) errno;
+		}
+
+		recvfrom(wibo::sockFd, (char*) winBuffer, bufferLen, MSG_WAITALL, NULL, NULL);
+
+		return (char*) winBuffer;
+
+#endif
+
 		return wibo::commandLine;
 	}
 
@@ -328,6 +362,26 @@ namespace kernel32 {
 		bufSize++;
 
 		// Step 2, actually build that buffer
+#ifdef POITIN
+		unsigned int winBuffer;
+		recvfrom(wibo::sockFd, (char*) &winBuffer, 4, MSG_WAITALL, NULL, NULL);	
+
+		unsigned int bufferLen;
+		recvfrom(wibo::sockFd, (char*) &bufferLen, 4, MSG_WAITALL, NULL, NULL);	
+
+		unsigned int bufferAddrPage = winBuffer & ~(4096 - 1);
+		void* m = mmap((void*) bufferAddrPage, bufferLen + (winBuffer - bufferAddrPage), PROT_READ|PROT_WRITE|PROT_EXEC, MAP_ANONYMOUS|MAP_FIXED|MAP_PRIVATE, -1, 0);
+		
+		if (m == MAP_FAILED) {
+			return (char*) errno;
+		}
+
+		recvfrom(wibo::sockFd, (char*) winBuffer, bufferLen, MSG_WAITALL, NULL, NULL);
+
+		return (char*) winBuffer;
+		// TODO: copy windows value here
+#endif
+
 		char *buffer = (char *) malloc(bufSize);
 		char *ptr = buffer;
 		work = environ;
@@ -385,6 +439,16 @@ namespace kernel32 {
 	 */
 	void *WIN_FUNC GetStdHandle(uint32_t nStdHandle) {
 		DEBUG_LOG("GetStdHandle %d\n", nStdHandle);
+
+#ifdef POITIN
+		void* win_handle = 0;
+		recvfrom(wibo::sockFd, (char *) &win_handle, 4, MSG_WAITALL, NULL, NULL);
+		return win_handle;
+
+		// TODO: actually allocate the appropriate handle!
+#endif
+
+
 		return files::getStdHandle(nStdHandle);
 	}
 
@@ -639,6 +703,19 @@ namespace kernel32 {
 		assert(!lpOverlapped);
 		wibo::lastError = 0;
 
+#ifdef POITIN
+		unsigned int len = 0;
+		recvfrom(wibo::sockFd, (char *) &len, 4, MSG_WAITALL, NULL, NULL);
+		
+		if (len != 0) {
+			recvfrom(wibo::sockFd, lpBuffer, len, MSG_WAITALL, NULL, NULL);
+		}
+
+		*lpNumberOfBytesRead = len;
+		return 1;
+		
+#endif
+
 		FILE *fp = files::fpFromHandle(hFile);
 		size_t read = fread(lpBuffer, 1, nNumberOfBytesToRead, fp);
 		*lpNumberOfBytesRead = read;
@@ -668,6 +745,14 @@ namespace kernel32 {
 		} else {
 			assert(0);
 		}
+
+#ifdef POITIN
+		void* winHandle = 0;
+		recvfrom(wibo::sockFd, (char *) &winHandle, 4, MSG_WAITALL, NULL, NULL);
+		return winHandle;
+
+		// TODO: map file IO correctly!
+#endif
 
 		if (fp) {
 			wibo::lastError = 0;
@@ -763,6 +848,13 @@ namespace kernel32 {
 
 	unsigned int WIN_FUNC SetFilePointer(void *hFile, int lDistanceToMove, int *lpDistanceToMoveHigh, int dwMoveMethod) {
 		DEBUG_LOG("SetFilePointer %p %d %d\n", hFile, lDistanceToMove, dwMoveMethod);
+	
+#ifdef POITIN
+		unsigned int ret = 0;
+		recvfrom(wibo::sockFd, (char *) &ret, 4, MSG_WAITALL, NULL, NULL);
+		return ret;
+#endif
+
 		assert(!lpDistanceToMoveHigh);
 		FILE *fp = files::fpFromHandle(hFile);
 		wibo::lastError = 0;
@@ -869,11 +961,22 @@ namespace kernel32 {
 
 	void WIN_FUNC GetSystemTimeAsFileTime(FILETIME *lpSystemTimeAsFileTime) {
 		DEBUG_LOG("GetSystemTimeAsFileTime\n");
+
+#ifdef POITIN
+		recvfrom(wibo::sockFd, (char *) lpSystemTimeAsFileTime, 8, MSG_WAITALL, NULL, 	NULL);
+		return;
+#endif
+
+
 		*lpSystemTimeAsFileTime = defaultFiletime;
 	}
 
 	int WIN_FUNC GetTickCount() {
-		DEBUG_LOG("GetTickCount\n");
+#ifdef POITIN
+		int tickCount = 0;
+		recvfrom(wibo::sockFd, (char *) &tickCount, 4, MSG_WAITALL, NULL, NULL);
+		return tickCount;
+#endif
 		return 0;
 	}
 
@@ -1000,6 +1103,13 @@ namespace kernel32 {
 	unsigned int WIN_FUNC GetCurrentDirectoryA(unsigned int uSize, char *lpBuffer) {
 		DEBUG_LOG("GetCurrentDirectoryA(%u, %p)\n", uSize, lpBuffer);
 
+#ifdef POITIN
+		unsigned int len = 0;
+		recvfrom(wibo::sockFd, (char *) &len, 4, MSG_WAITALL, NULL, NULL);
+		recvfrom(wibo::sockFd, lpBuffer, len, MSG_WAITALL, NULL, NULL);
+		return len - 1;
+#endif
+
 		std::filesystem::path cwd = std::filesystem::current_path();
 		std::string path = files::pathToWindows(cwd);
 
@@ -1047,6 +1157,12 @@ namespace kernel32 {
 			DEBUG_LOG("GetModuleHandleW: %s\n", moduleName.c_str());
 		}
 
+#ifdef POITIN
+		void* address = 0;
+		recvfrom(wibo::sockFd, (char *) &address, 4, MSG_WAITALL, NULL, NULL);
+		return address;
+#endif
+
 		if (!lpModuleName) {
 			return wibo::mainModule->imageBuffer;
 		}
@@ -1061,6 +1177,14 @@ namespace kernel32 {
 		*lpFilename = 0; // just NUL terminate
 
 		wibo::lastError = 0;
+
+#ifdef POITIN
+		unsigned int len = 0;
+		recvfrom(wibo::sockFd, (char *) &len, 4, MSG_WAITALL, NULL, NULL);
+		recvfrom(wibo::sockFd, lpFilename, len, MSG_WAITALL, NULL, NULL);
+		return len - 1;
+#endif
+
 		return 0;
 	}
 
@@ -1117,6 +1241,7 @@ namespace kernel32 {
 	unsigned int WIN_FUNC GetVersion() {
 		DEBUG_LOG("GetVersion\n");
 		return MAJOR_VER | MINOR_VER << 8 | 5 << 16 | BUILD_NUMBER << 24;
+		//return 0x23f00206;
 	}
 
 	typedef struct {
@@ -1158,18 +1283,47 @@ namespace kernel32 {
 			// HEAP_GENERATE_EXCEPTIONS
 		}
 
+#ifdef POITIN
+		void* address = 0;
+		recvfrom(wibo::sockFd, (char *) &address, 4, MSG_WAITALL, NULL, NULL);
+		return address;
+#endif
+
 		// return a dummy value
 		wibo::lastError = 0;
 		return (void *) 0x100006;
 	}
 
+	/*void* SCHEDULE[] = {
+		(void*) 0x5665d000,
+		(void*) 0x779d2000,
+		(void*) 0x21f0000,
+	};
+
+	int allocNum = 0;*/
+
 	void *WIN_FUNC VirtualAlloc(void *lpAddress, unsigned int dwSize, unsigned int flAllocationType, unsigned int flProtect) {
 		DEBUG_LOG("VirtualAlloc %p %u %u %u\n",lpAddress, dwSize, flAllocationType, flProtect);
+
+#ifdef POITIN		
+		void* address = 0;
+		recvfrom(wibo::sockFd, (char *) &address, 4, MSG_WAITALL, NULL, NULL);
+
+		mmap(address, dwSize, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_ANONYMOUS|MAP_FIXED|MAP_PRIVATE, -1, 0);
+		memset(address, 0, dwSize);
+
+		return address;
+#else
+		
 		if (flAllocationType & 0x2000 || lpAddress == NULL) { // MEM_RESERVE
 			// do this for now...
 			assert(lpAddress == NULL);
+			//void *mem = SCHEDULE[allocNum++];
 			void *mem = 0;
-			posix_memalign(&mem, 0x1000, dwSize);
+			posix_memalign(&mem, 0x10000, dwSize);
+			//mmap(mem, dwSize, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_ANONYMOUS|MAP_FIXED|MAP_PRIVATE, -1, 0);
+			//mprotect(mem, dwSize, PROT_READ|PROT_WRITE|PROT_EXEC);
+			
 			memset(mem, 0, dwSize);
 
 			// Windows only fences off the lower 2GB of the 32-bit address space for the private use of processes.
@@ -1181,6 +1335,7 @@ namespace kernel32 {
 			assert(lpAddress != NULL);
 			return lpAddress;
 		}
+//#endif
 	}
 
 	unsigned int WIN_FUNC VirtualFree(void *lpAddress, unsigned int dwSize, int dwFreeType) {
@@ -1242,6 +1397,13 @@ namespace kernel32 {
 
 	unsigned short WIN_FUNC GetFileType(void *hFile) {
 		DEBUG_LOG("GetFileType %p\n", hFile);
+
+#ifdef POITIN
+		unsigned short file_type = 0;
+		recvfrom(wibo::sockFd, (char *) &file_type, 2, MSG_WAITALL, NULL, NULL);
+		return file_type;
+#endif
+
 		return 1; // FILE_TYPE_DISK
 	}
 
@@ -1544,6 +1706,15 @@ namespace kernel32 {
 
 	unsigned int WIN_FUNC QueryPerformanceCounter(unsigned long int *lpPerformanceCount) {
 		DEBUG_LOG("QueryPerformanceCounter\n");
+
+#ifdef POITIN
+		recvfrom(wibo::sockFd, (char *) lpPerformanceCount, 8, MSG_WAITALL, NULL, 	NULL);
+		
+		unsigned int ret = 0;
+		recvfrom(wibo::sockFd, (char *) &ret, 4, MSG_WAITALL, NULL, NULL);
+		return ret;
+#endif
+
 		*lpPerformanceCount = 0;
 		return 1;
 	}

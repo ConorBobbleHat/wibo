@@ -1,3 +1,4 @@
+#include <netinet/in.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +21,10 @@ namespace wibo {
 	extern uint32_t lastError;
 	extern char *commandLine;
 	extern bool debugEnabled;
+
+#ifdef POITIN
+	extern int sockFd;
+#endif
 
 	void debug_log(const char *fmt, ...);
 
