@@ -1294,14 +1294,6 @@ namespace kernel32 {
 		return (void *) 0x100006;
 	}
 
-	/*void* SCHEDULE[] = {
-		(void*) 0x5665d000,
-		(void*) 0x779d2000,
-		(void*) 0x21f0000,
-	};
-
-	int allocNum = 0;*/
-
 	void *WIN_FUNC VirtualAlloc(void *lpAddress, unsigned int dwSize, unsigned int flAllocationType, unsigned int flProtect) {
 		DEBUG_LOG("VirtualAlloc %p %u %u %u\n",lpAddress, dwSize, flAllocationType, flProtect);
 
@@ -1335,7 +1327,7 @@ namespace kernel32 {
 			assert(lpAddress != NULL);
 			return lpAddress;
 		}
-//#endif
+#endif
 	}
 
 	unsigned int WIN_FUNC VirtualFree(void *lpAddress, unsigned int dwSize, int dwFreeType) {

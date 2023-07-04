@@ -304,8 +304,6 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	fprintf(stderr, "sockFd = %d\n", wibo::sockFd);
-
 	// TODO: load the address from server / command line / env. / anything else?
 	// Also: stop hardcoding these.
 	// Also: doing anything less hackily.
@@ -326,35 +324,12 @@ int main(int argc, char **argv) {
 	memset(stackBasePageAligned - stackSize, 0, stackSize);
 #endif
 
-	int ebxVal = 0x41414141;
-	if (getenv("WIBO_EBX_OVERRIDE")) {
-		fprintf(stderr, "ebx override!\n");
-		char* ebxValString = getenv("WIBO_EBX_OVERRIDE");
-		ebxVal = atoi(ebxValString);
-	}	
-
 	uint16_t tibSegment = (tibDesc.entry_number << 3) | 7;
 	// Invoke the damn thing
 	asm(
-		// Windows, for whatever reason, copies the start address to a bunch
-		// of registers
-		"movw %0, %%fs \n"
-		"mov %1, %%ecx \n"
-		"mov %1, %%esi \n"
-		"mov %1, %%edi \n"
-
-		// This is overwritten immediately, at least in aspsx
-		// We include it here for the sake of generating a matching trace
-		"mov $0x0226ffcc, %%eax \n"
-
-		// TODO: actually load these in from C
-		"mov $0x0226ff78, %%esp \n"
-		"mov $0x0226ff84, %%ebp \n"
-
-		"int3 \n"
-		"jmp *%1"
+		"movw %0, %%fs; int3; call *%1"
 		:
-		: "r"(tibSegment), "r"(wibo::mainModule->entryPoint), "b"(ebxVal)
+		: "r"(tibSegment), "r"(wibo::mainModule->entryPoint)
 	);
 	DEBUG_LOG("We came back\n");
 
