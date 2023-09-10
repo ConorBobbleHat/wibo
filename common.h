@@ -18,13 +18,14 @@ namespace user32 {
 }
 
 namespace wibo {
-	extern uint32_t lastError;
-	extern char *commandLine;
-	extern bool debugEnabled;
+	struct WiboConfig {
+		char *commandLine;
+		bool debugEnabled;
+		bool poitinEnabled;
+	};
 
-#ifdef POITIN
-	extern int sockFd;
-#endif
+	extern uint32_t lastError;
+	extern WiboConfig wiboConfig;
 
 	void debug_log(const char *fmt, ...);
 
@@ -60,3 +61,47 @@ namespace wibo {
 
 	extern Executable *mainModule;
 }
+
+struct UNICODE_STRING {
+	unsigned short Length;
+	unsigned short MaximumLength;
+	uint16_t *Buffer;
+};
+
+// Run Time Library (RTL)
+struct RTL_USER_PROCESS_PARAMETERS {
+	char Reserved1[16];
+	void *Reserved2[10];
+	UNICODE_STRING ImagePathName;
+	UNICODE_STRING CommandLine;
+};
+
+// Windows Process Environment Block (PEB)
+struct PEB {
+	char Reserved1[2];
+	char BeingDebugged;
+	char Reserved2[1];
+	void *Reserved3[2];
+	void *Ldr;
+	RTL_USER_PROCESS_PARAMETERS *ProcessParameters;
+	char Reserved4[104];
+	void *Reserved5[52];
+	void *PostProcessInitRoutine;
+	char Reserved6[128];
+	void *Reserved7[1];
+	unsigned int SessionId;
+};
+
+// Windows Thread Information Block (TIB)
+struct TIB {
+	/* 0x00 */ void *sehFrame;
+	/* 0x04 */ void *stackBase;
+	/* 0x08 */ void *stackLimit;
+	/* 0x0C */ void *subSystemTib;
+	/* 0x10 */ void *fiberData;
+	/* 0x14 */ void *arbitraryDataSlot;
+	/* 0x18 */ TIB *tib;
+	/*      */ char pad[0x14];
+	/* 0x30 */ PEB *peb;
+	/*      */ char pad2[0x1000];
+};

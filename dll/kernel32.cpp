@@ -1,6 +1,7 @@
 #include "common.h"
 #include "files.h"
 #include "handles.h"
+#include "poitin.h"
 #include <algorithm>
 #include <ctype.h>
 #include <filesystem>
@@ -100,6 +101,13 @@ namespace kernel32 {
 	}
 
 	uint32_t WIN_FUNC GetLastError() {
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		uint32_t ret = poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
+#endif
+
 		return wibo::lastError;
 	}
 
@@ -117,11 +125,12 @@ namespace kernel32 {
 	// @brief DWORD (unsigned int) returns a process identifier of the calling process.
 	unsigned int WIN_FUNC GetCurrentProcessId() {
 #ifdef POITIN
-		unsigned int id = 0;
-		recvfrom(wibo::sockFd, (char *) &id, 4, MSG_WAITALL, NULL, NULL);
-		return id;
+		poitin::runWindowsSyscall();
+		unsigned int ret = poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
 #endif
-		
+
 		uint32_t pid = getpid();
 		DEBUG_LOG("Current processID is: %d\n", pid);
 
@@ -129,18 +138,19 @@ namespace kernel32 {
 	}
 
 	unsigned int WIN_FUNC GetCurrentThreadId() {
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		unsigned int ret = poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
+#endif
+
 		pthread_t thread_id;
 		thread_id = pthread_self();
 		DEBUG_LOG("Current thread ID is: %lu\n", thread_id);
 
 		// Cast thread_id to unsigned int to fit a DWORD
 		unsigned int u_thread_id = (unsigned int) thread_id;
-		
-#ifdef POITIN
-		unsigned int received_thread_id = 0;
-		recvfrom(wibo::sockFd, (char *) &received_thread_id, 4, MSG_WAITALL, NULL, NULL);
-		return received_thread_id;
-#endif
 
 		return u_thread_id;
 	}
@@ -221,13 +231,31 @@ namespace kernel32 {
 		// DEBUG_LOG("DeleteCriticalSection(...)\n");
 	}
 	void WIN_FUNC EnterCriticalSection(CRITICAL_SECTION *param) {
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		poitin::ret();
+#endif
 		// DEBUG_LOG("EnterCriticalSection(...)\n");
 	}
 	void WIN_FUNC LeaveCriticalSection(CRITICAL_SECTION *param) {
 		// DEBUG_LOG("LeaveCriticalSection(...)\n");
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		poitin::ret();
+#endif
 	}
 
 	unsigned int WIN_FUNC InitializeCriticalSectionAndSpinCount(CRITICAL_SECTION *lpCriticalSection, unsigned int dwSpinCount) {
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+
+		poitin::memcpy(lpCriticalSection, sizeof(CRITICAL_SECTION));
+
+		unsigned int ret = poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
+#endif
+		
 		DEBUG_LOG("InitializeCriticalSectionAndSpinCount (%i)\n", dwSpinCount);
 		// can we get away with doing nothing...?
 		memset(lpCriticalSection, 0, sizeof(CRITICAL_SECTION));
@@ -243,6 +271,13 @@ namespace kernel32 {
 	static bool tlsValuesUsed[MAX_TLS_VALUES] = { false };
 	static void *tlsValues[MAX_TLS_VALUES];
 	unsigned int WIN_FUNC TlsAlloc() {
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		unsigned int ret = poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
+#endif
+
 		DEBUG_LOG("TlsAlloc()\n");
 		for (size_t i = 0; i < MAX_TLS_VALUES; i++) {
 			if (tlsValuesUsed[i] == false) {
@@ -265,6 +300,13 @@ namespace kernel32 {
 		}
 	}
 	void *WIN_FUNC TlsGetValue(unsigned int dwTlsIndex) {
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		void* ret = (void*) poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
+#endif
+
 		// DEBUG_LOG("TlsGetValue(%u)\n", dwTlsIndex);
 		if (dwTlsIndex >= 0 && dwTlsIndex < MAX_TLS_VALUES && tlsValuesUsed[dwTlsIndex])
 			return tlsValues[dwTlsIndex];
@@ -272,6 +314,13 @@ namespace kernel32 {
 			return 0;
 	}
 	unsigned int WIN_FUNC TlsSetValue(unsigned int dwTlsIndex, void *lpTlsValue) {
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		unsigned int ret = poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
+#endif
+		
 		// DEBUG_LOG("TlsSetValue(%u, %p)\n", dwTlsIndex, lpTlsValue);
 		if (dwTlsIndex >= 0 && dwTlsIndex < MAX_TLS_VALUES && tlsValuesUsed[dwTlsIndex]) {
 			tlsValues[dwTlsIndex] = lpTlsValue;
@@ -321,27 +370,19 @@ namespace kernel32 {
 		DEBUG_LOG("GetCommandLineA\n");
 
 #ifdef POITIN
-		unsigned int winBuffer;
-		recvfrom(wibo::sockFd, (char*) &winBuffer, 4, MSG_WAITALL, NULL, NULL);	
+		poitin::runWindowsSyscall();
+		char* commandLineAddr = (char *) poitin::fetchRegister(poitin::Register::EAX);
 
-		unsigned int bufferLen;
-		recvfrom(wibo::sockFd, (char*) &bufferLen, 4, MSG_WAITALL, NULL, NULL);	
+		// Copy the string over
+		size_t commandLen = poitin::strlen(commandLineAddr);
+		poitin::malloc(commandLineAddr, commandLen);
+		poitin::memcpy(commandLineAddr, commandLen);
 
-		unsigned int bufferAddrPage = winBuffer & ~(4096 - 1);
-		void* m = mmap((void*) bufferAddrPage, bufferLen + (winBuffer - bufferAddrPage), PROT_READ|PROT_WRITE|PROT_EXEC, MAP_ANONYMOUS|MAP_FIXED|MAP_PRIVATE, -1, 0);
-		
-		
-		if (m == MAP_FAILED) {
-			return (char*) errno;
-		}
-
-		recvfrom(wibo::sockFd, (char*) winBuffer, bufferLen, MSG_WAITALL, NULL, NULL);
-
-		return (char*) winBuffer;
-
+		poitin::ret();
+		return commandLineAddr;
 #endif
 
-		return wibo::commandLine;
+		return wibo::wiboConfig.commandLine;
 	}
 
 	uint16_t *WIN_FUNC GetCommandLineW() {
@@ -351,6 +392,7 @@ namespace kernel32 {
 
 	char *WIN_FUNC GetEnvironmentStrings() {
 		DEBUG_LOG("GetEnvironmentStrings\n");
+
 		// Step 1, figure out the size of the buffer we need.
 		size_t bufSize = 0;
 		char **work = environ;
@@ -362,26 +404,6 @@ namespace kernel32 {
 		bufSize++;
 
 		// Step 2, actually build that buffer
-#ifdef POITIN
-		unsigned int winBuffer;
-		recvfrom(wibo::sockFd, (char*) &winBuffer, 4, MSG_WAITALL, NULL, NULL);	
-
-		unsigned int bufferLen;
-		recvfrom(wibo::sockFd, (char*) &bufferLen, 4, MSG_WAITALL, NULL, NULL);	
-
-		unsigned int bufferAddrPage = winBuffer & ~(4096 - 1);
-		void* m = mmap((void*) bufferAddrPage, bufferLen + (winBuffer - bufferAddrPage), PROT_READ|PROT_WRITE|PROT_EXEC, MAP_ANONYMOUS|MAP_FIXED|MAP_PRIVATE, -1, 0);
-		
-		if (m == MAP_FAILED) {
-			return (char*) errno;
-		}
-
-		recvfrom(wibo::sockFd, (char*) winBuffer, bufferLen, MSG_WAITALL, NULL, NULL);
-
-		return (char*) winBuffer;
-		// TODO: copy windows value here
-#endif
-
 		char *buffer = (char *) malloc(bufSize);
 		char *ptr = buffer;
 		work = environ;
@@ -399,6 +421,34 @@ namespace kernel32 {
 	}
 
 	uint16_t* WIN_FUNC GetEnvironmentStringsW() {
+
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		uint16_t* envAddr = (uint16_t *) poitin::fetchRegister(poitin::Register::EAX);
+
+		// How big are the environment strings?
+		size_t environmentSize = 0;
+		uint16_t* pointer = envAddr;
+		size_t stringLen = 0;
+
+		while ((stringLen = poitin::strlenWide(pointer)) != 0) {
+			environmentSize += (stringLen + 1) * sizeof(uint16_t);
+			pointer += stringLen + 1;
+		}
+
+		environmentSize += 2;
+
+		if (!poitin::malloc((void*) envAddr, environmentSize)) {
+			poitin::ret();
+			return (uint16_t *) 0xdeadbeef;
+		}
+
+		poitin::memcpy((void*) envAddr, environmentSize);
+		
+		poitin::ret();
+		return envAddr;
+#endif
+
 		DEBUG_LOG("GetEnvironmentStringsW\n");
 		// Step 1, figure out the size of the buffer we need.
 		size_t bufSizeW = 0;
@@ -441,13 +491,11 @@ namespace kernel32 {
 		DEBUG_LOG("GetStdHandle %d\n", nStdHandle);
 
 #ifdef POITIN
-		void* win_handle = 0;
-		recvfrom(wibo::sockFd, (char *) &win_handle, 4, MSG_WAITALL, NULL, NULL);
-		return win_handle;
-
-		// TODO: actually allocate the appropriate handle!
+		poitin::runWindowsSyscall();
+		void* ret = (void*) poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
 #endif
-
 
 		return files::getStdHandle(nStdHandle);
 	}
@@ -702,20 +750,7 @@ namespace kernel32 {
 		DEBUG_LOG("ReadFile %p %d\n", hFile, nNumberOfBytesToRead);
 		assert(!lpOverlapped);
 		wibo::lastError = 0;
-
-#ifdef POITIN
-		unsigned int len = 0;
-		recvfrom(wibo::sockFd, (char *) &len, 4, MSG_WAITALL, NULL, NULL);
 		
-		if (len != 0) {
-			recvfrom(wibo::sockFd, lpBuffer, len, MSG_WAITALL, NULL, NULL);
-		}
-
-		*lpNumberOfBytesRead = len;
-		return 1;
-		
-#endif
-
 		FILE *fp = files::fpFromHandle(hFile);
 		size_t read = fread(lpBuffer, 1, nNumberOfBytesToRead, fp);
 		*lpNumberOfBytesRead = read;
@@ -745,14 +780,6 @@ namespace kernel32 {
 		} else {
 			assert(0);
 		}
-
-#ifdef POITIN
-		void* winHandle = 0;
-		recvfrom(wibo::sockFd, (char *) &winHandle, 4, MSG_WAITALL, NULL, NULL);
-		return winHandle;
-
-		// TODO: map file IO correctly!
-#endif
 
 		if (fp) {
 			wibo::lastError = 0;
@@ -848,12 +875,6 @@ namespace kernel32 {
 
 	unsigned int WIN_FUNC SetFilePointer(void *hFile, int lDistanceToMove, int *lpDistanceToMoveHigh, int dwMoveMethod) {
 		DEBUG_LOG("SetFilePointer %p %d %d\n", hFile, lDistanceToMove, dwMoveMethod);
-	
-#ifdef POITIN
-		unsigned int ret = 0;
-		recvfrom(wibo::sockFd, (char *) &ret, 4, MSG_WAITALL, NULL, NULL);
-		return ret;
-#endif
 
 		assert(!lpDistanceToMoveHigh);
 		FILE *fp = files::fpFromHandle(hFile);
@@ -961,22 +982,24 @@ namespace kernel32 {
 
 	void WIN_FUNC GetSystemTimeAsFileTime(FILETIME *lpSystemTimeAsFileTime) {
 		DEBUG_LOG("GetSystemTimeAsFileTime\n");
-
 #ifdef POITIN
-		recvfrom(wibo::sockFd, (char *) lpSystemTimeAsFileTime, 8, MSG_WAITALL, NULL, 	NULL);
+		poitin::runWindowsSyscall();
+		poitin::memcpy(lpSystemTimeAsFileTime, sizeof(FILETIME));
+		poitin::ret();
 		return;
 #endif
-
 
 		*lpSystemTimeAsFileTime = defaultFiletime;
 	}
 
 	int WIN_FUNC GetTickCount() {
 #ifdef POITIN
-		int tickCount = 0;
-		recvfrom(wibo::sockFd, (char *) &tickCount, 4, MSG_WAITALL, NULL, NULL);
-		return tickCount;
+		poitin::runWindowsSyscall();
+		int ret = (int) poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
 #endif
+
 		return 0;
 	}
 
@@ -1103,13 +1126,6 @@ namespace kernel32 {
 	unsigned int WIN_FUNC GetCurrentDirectoryA(unsigned int uSize, char *lpBuffer) {
 		DEBUG_LOG("GetCurrentDirectoryA(%u, %p)\n", uSize, lpBuffer);
 
-#ifdef POITIN
-		unsigned int len = 0;
-		recvfrom(wibo::sockFd, (char *) &len, 4, MSG_WAITALL, NULL, NULL);
-		recvfrom(wibo::sockFd, lpBuffer, len, MSG_WAITALL, NULL, NULL);
-		return len - 1;
-#endif
-
 		std::filesystem::path cwd = std::filesystem::current_path();
 		std::string path = files::pathToWindows(cwd);
 
@@ -1152,38 +1168,46 @@ namespace kernel32 {
 	}
 
 	void* WIN_FUNC GetModuleHandleW(const uint16_t* lpModuleName) {
-		if (wibo::debugEnabled) {
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+#endif
+
+		if (wibo::wiboConfig.debugEnabled) {
 			std::string moduleName = lpModuleName ? wideStringToString(lpModuleName) : "<null>";
 			DEBUG_LOG("GetModuleHandleW: %s\n", moduleName.c_str());
 		}
 
-#ifdef POITIN
-		void* address = 0;
-		recvfrom(wibo::sockFd, (char *) &address, 4, MSG_WAITALL, NULL, NULL);
-		return address;
-#endif
-
 		if (!lpModuleName) {
+#ifdef POITIN
+			poitin::ret();
+#endif
 			return wibo::mainModule->imageBuffer;
 		}
 
 		// wibo::lastError = 0;
+#ifdef POITIN
+		void* ret = (void*) poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
+#endif
 		return (void*)0x100001;
 	}
 
 	unsigned int WIN_FUNC GetModuleFileNameA(void* hModule, char* lpFilename, unsigned int nSize) {
 		DEBUG_LOG("GetModuleFileNameA (hModule=%p, nSize=%i)\n", hModule, nSize);
 
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		poitin::memcpy(lpFilename, poitin::strlen(lpFilename) + 1);
+
+		unsigned int ret = poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;	
+#endif
+
 		*lpFilename = 0; // just NUL terminate
 
 		wibo::lastError = 0;
-
-#ifdef POITIN
-		unsigned int len = 0;
-		recvfrom(wibo::sockFd, (char *) &len, 4, MSG_WAITALL, NULL, NULL);
-		recvfrom(wibo::sockFd, lpFilename, len, MSG_WAITALL, NULL, NULL);
-		return len - 1;
-#endif
 
 		return 0;
 	}
@@ -1223,7 +1247,7 @@ namespace kernel32 {
 	}
 
 	void* WIN_FUNC LoadLibraryExW(const uint16_t* lpLibFileName, void* hFile, unsigned int dwFlags) {
-		if (wibo::debugEnabled) {
+		if (wibo::wiboConfig.debugEnabled) {
 			std::string filename = wideStringToString(lpLibFileName);
 			DEBUG_LOG("LoadLibraryExW: %s\n", filename.c_str());
 		}
@@ -1240,8 +1264,17 @@ namespace kernel32 {
 
 	unsigned int WIN_FUNC GetVersion() {
 		DEBUG_LOG("GetVersion\n");
-		return MAJOR_VER | MINOR_VER << 8 | 5 << 16 | BUILD_NUMBER << 24;
-		//return 0x23f00206;
+		//return MAJOR_VER | MINOR_VER << 8 | 5 << 16 | BUILD_NUMBER << 24;
+
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		uint32_t ret = poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		
+		return ret;
+#endif
+		
+		return 0x23f00206;
 	}
 
 	typedef struct {
@@ -1284,9 +1317,10 @@ namespace kernel32 {
 		}
 
 #ifdef POITIN
-		void* address = 0;
-		recvfrom(wibo::sockFd, (char *) &address, 4, MSG_WAITALL, NULL, NULL);
-		return address;
+		poitin::runWindowsSyscall();
+		void* ret = (void*) poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
 #endif
 
 		// return a dummy value
@@ -1298,12 +1332,13 @@ namespace kernel32 {
 		DEBUG_LOG("VirtualAlloc %p %u %u %u\n",lpAddress, dwSize, flAllocationType, flProtect);
 
 #ifdef POITIN		
-		void* address = 0;
-		recvfrom(wibo::sockFd, (char *) &address, 4, MSG_WAITALL, NULL, NULL);
+		poitin::runWindowsSyscall();
+		void* address = (void*) poitin::fetchRegister(poitin::Register::EAX);
 
 		mmap(address, dwSize, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_ANONYMOUS|MAP_FIXED|MAP_PRIVATE, -1, 0);
 		memset(address, 0, dwSize);
 
+		poitin::ret();
 		return address;
 #else
 		
@@ -1358,7 +1393,13 @@ namespace kernel32 {
 
 	void WIN_FUNC GetStartupInfoA(STARTUPINFOA *lpStartupInfo) {
 		DEBUG_LOG("GetStartupInfoA\n");
-		memset(lpStartupInfo, 0, sizeof(STARTUPINFOA));
+		//memset(lpStartupInfo, 0, sizeof(STARTUPINFOA));
+	
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		poitin::memcpy(lpStartupInfo, sizeof(STARTUPINFOA));
+		poitin::ret();
+#endif
 	}
 
 	typedef struct _STARTUPINFOW {
@@ -1384,16 +1425,20 @@ namespace kernel32 {
 
 	void WIN_FUNC GetStartupInfoW(_STARTUPINFOW *lpStartupInfo) {
 		DEBUG_LOG("GetStartupInfoW\n");
-		memset(lpStartupInfo, 0, sizeof(_STARTUPINFOW));
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		poitin::memcpy(lpStartupInfo, sizeof(_STARTUPINFOW));
+#endif
 	}
 
 	unsigned short WIN_FUNC GetFileType(void *hFile) {
 		DEBUG_LOG("GetFileType %p\n", hFile);
 
 #ifdef POITIN
-		unsigned short file_type = 0;
-		recvfrom(wibo::sockFd, (char *) &file_type, 2, MSG_WAITALL, NULL, NULL);
-		return file_type;
+		poitin::runWindowsSyscall();
+		unsigned short ret = (unsigned short) poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
 #endif
 
 		return 1; // FILE_TYPE_DISK
@@ -1401,11 +1446,27 @@ namespace kernel32 {
 
 	unsigned int WIN_FUNC SetHandleCount(unsigned int uNumber) {
 		DEBUG_LOG("SetHandleCount %p\n", uNumber);
+
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		unsigned int ret = (unsigned int) poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
+#endif
+
 		return uNumber + 10;
 	}
 
 	unsigned int WIN_FUNC GetACP() {
 		DEBUG_LOG("GetACP\n");
+
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		unsigned int ret = (unsigned int) poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
+#endif
+	
 		// return 65001;    // UTF-8
 		// return 1200;     // Unicode (BMP of ISO 10646)
 		return 28591;       // Latin1 (ISO/IEC 8859-1)
@@ -1419,6 +1480,16 @@ namespace kernel32 {
 
 	unsigned int WIN_FUNC GetCPInfo(unsigned int codePage, CPINFO* lpCPInfo) {
 		DEBUG_LOG("GetCPInfo: %u\n", codePage);
+		
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		poitin::memcpy(lpCPInfo, sizeof(CPINFO));
+
+		uint32_t ret = poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
+#endif
+		
 		lpCPInfo->MaxCharSize = 1;
 		lpCPInfo->DefaultChar[0] = 0;
 		return 1; // success
@@ -1427,23 +1498,33 @@ namespace kernel32 {
 	unsigned int WIN_FUNC WideCharToMultiByte(unsigned int codePage, unsigned int dwFlags, uint16_t *lpWideCharStr, int cchWideChar, char *lpMultiByteStr, int cbMultiByte, char *lpDefaultChar, unsigned int *lpUsedDefaultChar) {
 		DEBUG_LOG("WideCharToMultiByte(codePage=%u, flags=%x, wcs=%p, wideChar=%d, mbs=%p, multiByte=%d, defaultChar=%p, usedDefaultChar=%p)\n", codePage, dwFlags, lpWideCharStr, cchWideChar, lpMultiByteStr, cbMultiByte, lpDefaultChar, lpUsedDefaultChar);
 
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+#endif
+
 		if (cchWideChar == -1) {
 			cchWideChar = wstrlen(lpWideCharStr) + 1;
 		}
 
 		if (cbMultiByte == 0) {
+#ifdef POITIN
+			poitin::ret();
+#endif
 			return cchWideChar;
 		}
 		for (int i = 0; i < cchWideChar; i++) {
 			lpMultiByteStr[i] = lpWideCharStr[i] & 0xFF;
-		}
+		} 
 
-		if (wibo::debugEnabled) {
+		/*if (wibo::wiboConfig.debugEnabled) {
 			std::string s(lpMultiByteStr, lpMultiByteStr + cchWideChar);
 			DEBUG_LOG("Converted string: [%s] (len %d)\n", s.c_str(), cchWideChar);
-		}
+		}*/
 
+#ifdef POITIN
+		poitin::ret();
 		return cchWideChar;
+#endif
 	}
 
 	unsigned int WIN_FUNC MultiByteToWideChar(unsigned int codePage, unsigned int dwFlags, const char *lpMultiByteStr, int cbMultiByte, uint16_t *lpWideCharStr, int cchWideChar) {
@@ -1458,7 +1539,7 @@ namespace kernel32 {
 			return cbMultiByte;
 		}
 
-		if (wibo::debugEnabled) {
+		if (wibo::wiboConfig.debugEnabled) {
 			std::string s(lpMultiByteStr, lpMultiByteStr + cbMultiByte);
 			DEBUG_LOG("Converting string: [%s] (len %d)\n", s.c_str(), cbMultiByte);
 		}
@@ -1499,7 +1580,16 @@ namespace kernel32 {
 
 	unsigned int WIN_FUNC FreeEnvironmentStringsW(void *penv) {
 		DEBUG_LOG("FreeEnvironmentStringsW: %p\n", penv);
+#ifndef POITIN
 		free(penv);
+#else
+		poitin::runWindowsSyscall();
+		unsigned int ret = poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
+#endif
+		// TODO: we really really should unmap that memory from earlier!
+
 		return 1;
 	}
 
@@ -1520,6 +1610,13 @@ namespace kernel32 {
 	void *WIN_FUNC GetProcAddress(void *hModule, char *lpProcName) {
 		DEBUG_LOG("GetProcAddress: %s from %p\n", lpProcName, hModule);
 
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		void* ret = (void*) poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
+#endif
+
 		if (strcmp(lpProcName, "IsProcessorFeaturePresent") == 0) return (void *) IsProcessorFeaturePresent;
 		// if (strcmp(lpProcName, "InitializeCriticalSectionEx") == 0) return (void *) InitializeCriticalSectionEx;
 		// if (strcmp(lpProcName, "FlsSetValue") == 0) return (void *) FlsSetValue;
@@ -1534,8 +1631,20 @@ namespace kernel32 {
 	void *WIN_FUNC HeapAlloc(void *hHeap, unsigned int dwFlags, size_t dwBytes) {
 		DEBUG_LOG("HeapAlloc(heap=%p, flags=%x, bytes=%u)\n", hHeap, dwFlags, dwBytes);
 
+#ifdef POITIN		
+		poitin::runWindowsSyscall();
+		void* address = (void*) poitin::fetchRegister(poitin::Register::EAX);
+
+		poitin::malloc(address, dwBytes);
+		memset(address, 0, dwBytes);
+
+		poitin::ret();
+		return address;
+#endif
+
 		void *mem = doAlloc(dwBytes, dwFlags & 8);
 		DEBUG_LOG("HeapAlloc returning %p\n", mem);
+
 		return mem;
 	}
 
@@ -1558,6 +1667,16 @@ namespace kernel32 {
 
 	int WIN_FUNC HeapSetInformation(void *HeapHandle, int HeapInformationClass, void *HeapInformation, size_t HeapInformationLength) {
 		DEBUG_LOG("HeapSetInformation %p %d\n", HeapHandle, HeapInformationClass);
+
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		poitin::memcpy(HeapInformation, HeapInformationLength);
+		
+		unsigned int ret = poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
+#endif
+	
 		return 1;
 	}
 
@@ -1606,10 +1725,29 @@ namespace kernel32 {
 	}
 
 	void *WIN_FUNC EncodePointer(void *Ptr) {
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		void* ret = (void*) poitin::fetchRegister(poitin::Register::EAX);
+
+		poitin::ret();
+		return ret;
+#endif
 		return Ptr;
 	}
 
 	void *WIN_FUNC DecodePointer(void *Ptr) {
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		void* ret = (void*) poitin::fetchRegister(poitin::Register::EAX);
+		
+		if (!poitin::checkAddressMapped(ret, poitin::Executor::WIBO)) {
+			ret = poitin::substituteDynamicPointer(ret);
+		}
+
+		poitin::ret();
+		return (void*) ret;
+#endif
+
 		return Ptr;
 	}
 
@@ -1696,17 +1834,17 @@ namespace kernel32 {
 		return setenv(lpName, lpValue, 1 /* OVERWRITE */);
 	}
 
-	unsigned int WIN_FUNC QueryPerformanceCounter(unsigned long int *lpPerformanceCount) {
+	unsigned int WIN_FUNC QueryPerformanceCounter(unsigned long long int *lpPerformanceCount) {
 		DEBUG_LOG("QueryPerformanceCounter\n");
-
 #ifdef POITIN
-		recvfrom(wibo::sockFd, (char *) lpPerformanceCount, 8, MSG_WAITALL, NULL, 	NULL);
-		
-		unsigned int ret = 0;
-		recvfrom(wibo::sockFd, (char *) &ret, 4, MSG_WAITALL, NULL, NULL);
+		poitin::runWindowsSyscall();
+		poitin::memcpy(lpPerformanceCount, sizeof(unsigned long long int));
+
+		unsigned int ret = poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
 		return ret;
 #endif
-
+		
 		*lpPerformanceCount = 0;
 		return 1;
 	}
@@ -1765,11 +1903,34 @@ namespace kernel32 {
 	}
 
 	int WIN_FUNC InterlockedIncrement(int *Addend) {
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		poitin::ret();
+#endif
+
 		return *Addend += 1;
 	}
 
 	int WIN_FUNC InterlockedDecrement(int *Addend) {
 		return *Addend -= 1;
+	}
+
+	unsigned int WIN_FUNC FlsAlloc(void* callback) {
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		unsigned int ret = poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
+#endif
+	}
+
+	bool WIN_FUNC FlsSetValue(unsigned int dwFlsIndex, void* lpFlsData) {
+#ifdef POITIN
+		poitin::runWindowsSyscall();
+		bool ret = (bool) poitin::fetchRegister(poitin::Register::EAX);
+		poitin::ret();
+		return ret;
+#endif
 	}
 }
 
@@ -1934,6 +2095,10 @@ void *wibo::resolveKernel32(const char *name) {
 	if (strcmp(name, "RtlUnwind") == 0) return (void *) kernel32::RtlUnwind;
 	if (strcmp(name, "InterlockedIncrement") == 0) return (void *) kernel32::InterlockedIncrement;
 	if (strcmp(name, "InterlockedDecrement") == 0) return (void *) kernel32::InterlockedDecrement;
+
+	// fibersapi.h
+	if (strcmp(name, "FlsAlloc") == 0) return (void *) kernel32::FlsAlloc;
+	if (strcmp(name, "FlsSetValue") == 0) return (void *) kernel32::FlsSetValue;
 
 	return 0;
 }

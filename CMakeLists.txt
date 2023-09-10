@@ -28,6 +28,7 @@ add_executable(wibo
     dll/version.cpp
     files.cpp
     handles.cpp
+    poitin.cpp
     loader.cpp
     main.cpp
     )

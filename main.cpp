@@ -1,5 +1,6 @@
 #include "common.h"
 #include "files.h"
+#include "poitin.h"
 #include <asm/ldt.h>
 #include <cstdint>
 #include <cstdio>
@@ -18,19 +19,14 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-uint32_t wibo::lastError = 0;
-char *wibo::commandLine;
-wibo::Executable *wibo::mainModule = 0;
-bool wibo::debugEnabled = false;
-
-#ifdef POITIN
-int wibo::sockFd;
-#endif
+uint32_t wibo::lastError;
+wibo::Executable *wibo::mainModule;
+wibo::WiboConfig wibo::wiboConfig;
 
 void wibo::debug_log(const char *fmt, ...) {
 	va_list args;
 	va_start(args, fmt);
-	if (wibo::debugEnabled)
+	if (wibo::wiboConfig.debugEnabled)
 		vfprintf(stderr, fmt, args);
 	va_end(args);
 }
@@ -110,50 +106,6 @@ void *wibo::resolveFuncByOrdinal(const char *dllName, uint16_t ordinal) {
 	return resolveMissingFunc(dllName, buf);
 }
 
-struct UNICODE_STRING {
-	unsigned short Length;
-	unsigned short MaximumLength;
-	uint16_t *Buffer;
-};
-
-// Run Time Library (RTL)
-struct RTL_USER_PROCESS_PARAMETERS {
-	char Reserved1[16];
-	void *Reserved2[10];
-	UNICODE_STRING ImagePathName;
-	UNICODE_STRING CommandLine;
-};
-
-// Windows Process Environment Block (PEB)
-struct PEB {
-	char Reserved1[2];
-	char BeingDebugged;
-	char Reserved2[1];
-	void *Reserved3[2];
-	void *Ldr;
-	RTL_USER_PROCESS_PARAMETERS *ProcessParameters;
-	char Reserved4[104];
-	void *Reserved5[52];
-	void *PostProcessInitRoutine;
-	char Reserved6[128];
-	void *Reserved7[1];
-	unsigned int SessionId;
-};
-
-// Windows Thread Information Block (TIB)
-struct TIB {
-	/* 0x00 */ void *sehFrame;
-	/* 0x04 */ void *stackBase;
-	/* 0x08 */ void *stackLimit;
-	/* 0x0C */ void *subSystemTib;
-	/* 0x10 */ void *fiberData;
-	/* 0x14 */ void *arbitraryDataSlot;
-	/* 0x18 */ TIB *tib;
-	/*      */ char pad[0x14];
-	/* 0x30 */ PEB *peb;
-	/*      */ char pad2[0x1000];
-};
-
 // Make this global to ease debugging
 TIB tib;
 
@@ -164,7 +116,7 @@ int main(int argc, char **argv) {
 	}
 
 	if (getenv("WIBO_DEBUG")) {
-		wibo::debugEnabled = true;
+		wibo::wiboConfig.debugEnabled = true;
 	}
 
 	files::init();
@@ -172,8 +124,6 @@ int main(int argc, char **argv) {
 	// Create TIB
 	memset(&tib, 0, sizeof(tib));
 	tib.tib = &tib;
-	tib.sehFrame = (void*) 0x000dffcc;
-	tib.stackLimit = (void*) 0x000d0000;
 	tib.peb = (PEB*)calloc(sizeof(PEB), 1);
 	tib.peb->ProcessParameters = (RTL_USER_PROCESS_PARAMETERS*)calloc(sizeof(RTL_USER_PROCESS_PARAMETERS), 1);
 
@@ -232,8 +182,8 @@ int main(int argc, char **argv) {
 	}
 	cmdLine += '\0';
 
-	wibo::commandLine = cmdLine.data();
-	DEBUG_LOG("Command line: %s\n", wibo::commandLine);
+	wibo::wiboConfig.commandLine = cmdLine.data();
+	DEBUG_LOG("Command line: %s\n", wibo::wiboConfig.commandLine);
 
 	wibo::mainModule = new wibo::Executable();
 
@@ -285,49 +235,20 @@ int main(int argc, char **argv) {
 	procMap.close();
 
 #ifdef POITIN
-	wibo::sockFd = socket(AF_INET, SOCK_DGRAM, 0);
-
-	if (wibo::sockFd < 0) {
-		perror("Error creating socket");
+	if (!poitin::init(&tib)) {
+		fprintf(stderr, "Failed to initalize poitin!\n");
 		return 1;
 	}
-
-	sockaddr_in server_addr;
-	memset(&server_addr, 0, sizeof(server_addr));
-
-	server_addr.sin_family    = AF_INET; // IPv4
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(8088);
-
-	if (bind(wibo::sockFd, (const struct sockaddr*) &server_addr, sizeof(server_addr)) < 0) {
-		perror("Error binding socket");
-		return 1;
-	}
-
-	// TODO: load the address from server / command line / env. / anything else?
-	// Also: stop hardcoding these.
-	// Also: doing anything less hackily.
-	void* stackBase = (void*) 0x0226ff84;
-	void* stackBasePageAligned = (void*) 0x2270000;
-
-	void* stackTop = (void*) 0x0226ff74;
-
-	// Make sure to map our stack with the correct permissions
-	// before we attempt to use it
-	int stackSize = 0x1000;
-	
-	void* stack = mmap(stackBasePageAligned - stackSize, stackSize, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_ANONYMOUS|MAP_FIXED|MAP_PRIVATE, -1, 0);
-	if (stack == MAP_FAILED) {
-		printf("Image mapping failed: %d!\n",  errno);
-	}
-	
-	memset(stackBasePageAligned - stackSize, 0, stackSize);
 #endif
 
 	uint16_t tibSegment = (tibDesc.entry_number << 3) | 7;
 	// Invoke the damn thing
 	asm(
-		"movw %0, %%fs; int3; call *%1"
+		"movw %0, %%fs \n"
+#ifdef POITIN
+		"int3 \n"
+#endif
+		"call *%1 \n"
 		:
 		: "r"(tibSegment), "r"(wibo::mainModule->entryPoint)
 	);
