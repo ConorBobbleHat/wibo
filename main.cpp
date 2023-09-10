@@ -1,10 +1,7 @@
 #include "common.h"
-#include "files.h"
 #include "poitin.h"
+#include "files.h"
 #include <asm/ldt.h>
-#include <cstdint>
-#include <cstdio>
-#include <cstdlib>
 #include <filesystem>
 #include <errno.h>
 #include <memory>
@@ -13,14 +10,12 @@
 #include <stdarg.h>
 #include <iostream>
 #include <fstream>
-#include <sys/socket.h>
-#include <netinet/in.h>
 
-#include <sys/socket.h>
-#include <netinet/in.h>
+uint32_t wibo::lastError = 0;
+char** wibo::argv;
+int wibo::argc;
 
-uint32_t wibo::lastError;
-wibo::Executable *wibo::mainModule;
+wibo::Executable *wibo::mainModule = 0;
 wibo::WiboConfig wibo::wiboConfig;
 
 void wibo::debug_log(const char *fmt, ...) {
@@ -62,48 +57,87 @@ FOR_256
 #undef FOR_256_2
 #undef FOR_256
 
-static void *resolveMissingFunc(const char *dllName, const char *funcName) {
+static void *resolveMissingFuncName(const char *dllName, const char *funcName) {
 	DEBUG_LOG("Missing function: %s (%s)\n", dllName, funcName);
 	assert(stubIndex < 0x100);
 	assert(strlen(dllName) < 0x100);
 	assert(strlen(funcName) < 0x100);
 	strcpy(stubFuncNames[stubIndex], funcName);
 	strcpy(stubDlls[stubIndex], dllName);
-	return (void *) stubFuncs[stubIndex++];
+	return (void *)stubFuncs[stubIndex++];
 }
 
-void *wibo::resolveFuncByName(const char *dllName, const char *funcName) {
-	void *func = nullptr;
-	if (strcasecmp(dllName, "KERNEL32.dll") == 0) {
-		func = wibo::resolveKernel32(funcName);
-	} else if (strcasecmp(dllName, "USER32.dll") == 0) {
-		func = wibo::resolveUser32(funcName);
-	} else if (strcasecmp(dllName, "ADVAPI32.dll") == 0) {
-		func = wibo::resolveAdvApi32(funcName);
-	} else if (strcasecmp(dllName, "VERSION.dll") == 0) {
-		func = wibo::resolveVersion(funcName);
-	} else if (strcasecmp(dllName, "OLE32.dll") == 0) {
-		func = wibo::resolveOle32(funcName);
-	}
-
-	if (func)
-		return func;
-	return resolveMissingFunc(dllName, funcName);
-}
-
-void *wibo::resolveFuncByOrdinal(const char *dllName, uint16_t ordinal) {
-	void *func;
-	if (strcmp(dllName, "LMGR11.dll") == 0 ||
-			strcmp(dllName, "LMGR326B.dll") == 0 ||
-			strcmp(dllName, "LMGR8C.dll") == 0) {
-		func = wibo::resolveLmgr(ordinal);
-	}
-
-	if (func)
-		return func;
+static void *resolveMissingFuncOrdinal(const char *dllName, uint16_t ordinal) {
 	char buf[16];
 	sprintf(buf, "%d", ordinal);
-	return resolveMissingFunc(dllName, buf);
+	return resolveMissingFuncName(dllName, buf);
+}
+
+extern const wibo::Module lib_advapi32;
+extern const wibo::Module lib_bcrypt;
+extern const wibo::Module lib_crt;
+extern const wibo::Module lib_kernel32;
+extern const wibo::Module lib_lmgr;
+extern const wibo::Module lib_msvcrt;
+extern const wibo::Module lib_ntdll;
+extern const wibo::Module lib_ole32;
+extern const wibo::Module lib_user32;
+extern const wibo::Module lib_vcruntime;
+extern const wibo::Module lib_version;
+const wibo::Module * wibo::modules[] = {
+	&lib_advapi32,
+	&lib_bcrypt,
+	&lib_crt,
+	&lib_kernel32,
+	&lib_lmgr,
+	&lib_msvcrt,
+	&lib_ntdll,
+	&lib_ole32,
+	&lib_user32,
+	&lib_vcruntime,
+	&lib_version,
+	nullptr,
+};
+
+struct ModuleInfo {
+	std::string name;
+	const wibo::Module* module = nullptr;
+};
+
+HMODULE wibo::loadModule(const char *dllName) {
+	auto *result = new ModuleInfo;
+	result->name = dllName;
+	for (int i = 0; modules[i]; i++) {
+		for (int j = 0; modules[i]->names[j]; j++) {
+			if (strcasecmp(dllName, modules[i]->names[j]) == 0) {
+				result->module = modules[i];
+				return result;
+			}
+		}
+	}
+	return result;
+}
+
+void wibo::freeModule(HMODULE module) { delete static_cast<ModuleInfo *>(module); }
+
+void *wibo::resolveFuncByName(HMODULE module, const char *funcName) {
+	auto *info = static_cast<ModuleInfo *>(module);
+	if (info && info->module && info->module->byName) {
+		void *func = info->module->byName(funcName);
+		if (func)
+			return func;
+	}
+	return resolveMissingFuncName(info->name.c_str(), funcName);
+}
+
+void *wibo::resolveFuncByOrdinal(HMODULE module, uint16_t ordinal) {
+	auto *info = static_cast<ModuleInfo *>(module);
+	if (info && info->module && info->module->byOrdinal) {
+		void *func = info->module->byOrdinal(ordinal);
+		if (func)
+			return func;
+	}
+	return resolveMissingFuncOrdinal(info->name.c_str(), ordinal);
 }
 
 // Make this global to ease debugging
@@ -185,7 +219,11 @@ int main(int argc, char **argv) {
 	wibo::wiboConfig.commandLine = cmdLine.data();
 	DEBUG_LOG("Command line: %s\n", wibo::wiboConfig.commandLine);
 
-	wibo::mainModule = new wibo::Executable();
+	wibo::argv = argv + 1;
+	wibo::argc = argc - 1;
+
+	wibo::Executable exec;
+	wibo::mainModule = &exec;
 
 	char* pe_path = argv[1];
 	FILE *f = fopen(pe_path, "rb");
@@ -195,7 +233,7 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	wibo::mainModule->loadPE(f);
+	exec.loadPE(f);
 	fclose(f);
 
 	// 32-bit windows only reserves the lowest 2GB of memory for use by a process (https://www.tenouk.com/WinVirtualAddressSpace.html)
@@ -222,35 +260,24 @@ int main(int argc, char **argv) {
 			holdingMapStart = std::max(holdingMapStart, FILL_MEMORY_ABOVE);
 
 			void* holdingMap = mmap((void*) holdingMapStart, holdingMapEnd - holdingMapStart, PROT_READ, MAP_ANONYMOUS|MAP_FIXED|MAP_PRIVATE, -1, 0);
-			
+
 			if (holdingMap == MAP_FAILED) {
 				perror("Failed to create holding map");
 				return 1;
 			}
 		}
-		
+
 		lastMapEnd = mapEnd;
 	}
 
 	procMap.close();
 
-#ifdef POITIN
-	if (!poitin::init(&tib)) {
-		fprintf(stderr, "Failed to initalize poitin!\n");
-		return 1;
-	}
-#endif
-
 	uint16_t tibSegment = (tibDesc.entry_number << 3) | 7;
 	// Invoke the damn thing
 	asm(
-		"movw %0, %%fs \n"
-#ifdef POITIN
-		"int3 \n"
-#endif
-		"call *%1 \n"
+		"movw %0, %%fs; call *%1"
 		:
-		: "r"(tibSegment), "r"(wibo::mainModule->entryPoint)
+		: "r"(tibSegment), "r"(exec.entryPoint)
 	);
 	DEBUG_LOG("We came back\n");
 

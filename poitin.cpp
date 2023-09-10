@@ -1,4 +1,3 @@
-#include "common.h"
 #include "poitin.h"
 
 namespace poitin {

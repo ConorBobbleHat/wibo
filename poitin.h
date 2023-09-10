@@ -1,5 +1,9 @@
+#include "common.h"
 #include <sys/mman.h>
 #include <arpa/inet.h>
+
+#ifndef POITIN_H
+#define POITIN_H
 
 namespace poitin {
     static int socketFd;
@@ -36,3 +40,5 @@ namespace poitin {
 
     void ret();
 }
+
+#endif
